@@ -228,7 +228,7 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
         
         # Determine award status based on matches
-        award_status = "No Awards"
+        award_status = ""
         list1_found = False
         list2_found = False
 
