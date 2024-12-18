@@ -1,0 +1,48 @@
+CVPR: Computer Vision and Pattern Recognition
+ICCV: International Conference on Computer Vision
+ECCV: European Conference on Computer Vision
+ICLR: International Conference on Learning Representations
+ICML: International Conference on Machine Learning
+Misys: Machine Learning and Systems
+NeurIPS: Neural Information Processing Systems
+IROS: Intelligent Robots and Systems
+IJCAI: International Joint Conference on Artificial
+EMNLP: Empirical Methods in Natural Language Processing
+ACL: Association for computational Linguistics
+INFOCOM: International Conference on Computer Communications
+Sigcomm: Special Interest Group on Communication
+NSDI: Networked Systems Design and Implementation
+PIMRC: Personal, Indoor and Mobile Radio Communications
+GlobeCOM: Global Communications
+ICC: International Conference on Communications
+ISAP: International Symposium on Antennas and Propagation
+OFC: Optical Fiber Communication
+CLEO: Conference on Lasers and Electro-Optics
+ECOC: European Conference on Optical Communication
+EuroSys: European chapter of ACM SIGOPS (Special Interest Group on Operating Systems)
+OSDI: Operating Systems Design and Implementation
+ASPLOS: Architectural Support for Programming Languages and Operating Systems
+SIGKDD: Special Interest Group on Knowledge Discovery and Data Mining
+SigMOD: Special Interest Group on Management of Data
+VLDB: Very Large Data Bases
+ESEC/FSE: European Software Engineering Conference and Foundations of Software Engineering (FSE)
+ICSE: International Conference on Software Engineering
+ASE: Automated Software Engineering
+ACMMM: ACM Multimedia
+USENIX Security
+S&P: IEEE Symposium on Security and Privacy
+NDSS: Network and Distributed System Security
+CCS: Computer and Communications Security
+FAST: File and Storage Technologies
+ISCA: International Symposium on Computer-Aided Design
+DAC: Design Automation Conference
+ICCAD: International Conference on Computer-Aided Design
+ISSCC: International Solid-State Circuits Conference
+VLSI: Very Large Scale Integration
+IEDM: International Electron Devicces Meeting
+EPTC: Electronics Packaging Technology Conference
+WWW: International World Wide Web Conference
+ISIT: International Symposium on Information Theory
+FOCS: IEEE Symposium on Foundations of Computer Science
+SODA: Symposium on Discrete Algorithms
+STOC: Symposium on Theory of Computing

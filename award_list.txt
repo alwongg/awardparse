@@ -1,0 +1,95 @@
+International Collegiate Programming Contest
+ICPC
+
+International Olympiad in Informatics
+IOI
+International Mathematical Olympiad
+IMO
+International Physics Olympiad
+IPhO
+International Chemistry Olympiad
+IChO
+
+International Mathematics Competition for University Students
+IMC
+
+Capture The Flag Security Competition
+CTF
+
+Kaggle Big Data Science Competition
+Kaggle
+
+RoboCup World Cup for Robotics
+RoboCup
+
+ASC Student Supercomputer Challenge
+ASC
+International Student Cluster Competition
+ISC
+SC Student Supercomputer Challenge
+SC
+
+European Union Contest for Young Scientists
+EUCYS
+
+Mathematical Contest in Modeling / Interdisciplinary Contest in Modeling
+MCM/ICM
+
+IEEE Xtreme Programming Competition
+IEEE Xtreme
+
+ACM Student Research Competition
+ACM SRC
+
+China Graduate Electronic Design Contest
+中国研究生电子设计竞赛
+
+China Graduate Innovation IC Contest
+中国研究生创芯大赛
+
+China Graduate Mathematical Contest in Modeling
+中国研究生数学建模竞赛
+
+China Collegiate Information Security Contest
+中国大学生信息安全竞赛创新实践能力赛
+
+China Graduate Cybersecurity Innovation Contest
+中国研究生网络安全创新大赛
+
+China Graduate Artificial Intelligence Innovation Contest
+中国研究生人工智能创新大赛
+
+RoboCup China Open
+RoboCup China Open
+
+National College Students Mathematical Contest in Modeling
+全国大学生数学建模竞赛
+
+National College Students Electronic Design Contest
+全国大学生电子设计竞赛
+
+Huawei Software Challenge
+华为软件挑战赛
+
+Huawei China Collegiate Power Electronics Innovation Contest
+华为中国大学生电力电子创新大赛
+
+Huawei Algorithm Elite Challenge
+华为算法精英挑战赛
+
+Huawei Embedded Software Competition
+华为嵌入式软件大赛
+
+Huawei Bisheng Cup National Compilation System Contest
+华为毕昇杯全国大学生编译系统能力大赛
+
+National College Students Operating System Competition
+全国大学生操作系统能力大赛
+
+Huawei Business Challenge Series
+包括：GDCC全球数据压缩算法大赛
+Huawei ICPC/Codeforces/Algotester/iRunner/IMC Challenge
+华为ICPC挑战赛
+
+Huawei Financial Elite Challenge
+华为财务精英挑战赛
