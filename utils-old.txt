@@ -1,0 +1,386 @@
+import os
+import json
+import fitz  # PyMuPDF
+from pdf2image import convert_from_path
+import pytesseract
+from openai import OpenAI
+from docx import Document  # For .docx files
+from docx2txt import process as docx2txt_process  # To extract text from docx
+from PIL import Image  # To handle images for OCR from screenshots
+from pdf2image import convert_from_path
+from pytesseract import image_to_string
+from dotenv import load_dotenv  # Ensure this is imported correctly
+import re
+
+import platform
+import subprocess
+
+# Load environment variables
+load_dotenv()
+
+import platform
+import subprocess
+
+def extract_text_from_file(file):
+    print(f"\n[INFO] Starting text extraction for file: {file}")
+    file_extension = os.path.splitext(file)[1]
+    text_content = ""
+
+    # Handle PDF files using MuPDF
+    if file_extension == ".pdf":
+        print("[INFO] Detected file type: PDF. Attempting to extract text using MuPDF...")
+        try:
+            pdf_document = fitz.open(file)
+            for page_num in range(pdf_document.page_count):
+                page = pdf_document.load_page(page_num)
+                text_content += page.get_text()
+
+            # If MuPDF fails to extract any text, fallback to OCR
+            if len(text_content.strip()) == 0:
+                raise ValueError("No text extracted using MuPDF, falling back to OCR...")
+
+        except Exception as e:
+            print(f"[ERROR] MuPDF failed with error: {e}. Falling back to OCR...")
+            print(f"MuPDF error: {e}")
+            print("Falling back to OCR...")
+            images = convert_from_path(file)
+            for image in images:
+                text_content += pytesseract.image_to_string(image)
+
+    # Handle .docx files using python-docx and fallback to docx2txt
+    elif file_extension == ".docx":
+        print("[INFO] Detected file type: DOCX. Attempting to extract text using python-docx...")
+        try:
+            # First try python-docx
+            doc = Document(file)
+            for paragraph in doc.paragraphs:
+                text_content += paragraph.text + "\n"
+
+            # If python-docx fails to extract any text, fallback to docx2txt
+            if not text_content.strip():
+                print("[WARNING] No text extracted using python-docx. Falling back to docx2txt...")
+                print("No text extracted using python-docx, falling back to docx2txt...")
+                text_content = docx2txt_process(file)
+
+                if not text_content.strip():
+                    raise ValueError("No text extracted using docx2txt either, falling back to OCR...")
+
+        except Exception as e:
+            print(f"[ERROR] DOCX extraction failed: {e}. Falling back to OCR...")
+            print(f"docx2txt error: {e}")
+            print("Falling back to OCR for .docx file...")
+
+            # Convert the document to images and apply OCR
+            try:
+                doc_images = convert_from_path(file)
+                for image in doc_images:
+                    text_content += pytesseract.image_to_string(image)
+
+                if not text_content.strip():
+                    raise ValueError("OCR failed to extract text from the .docx file.")
+            except Exception as e:
+                print(f"OCR fallback for .docx failed: {e}")
+                text_content = ""  # Set empty to indicate failure
+
+    # Handle .doc files using antiword on Linux/Mac
+    elif file_extension == ".doc":
+        print("[INFO] Detected file type: DOC. Attempting to extract text using antiword...")
+        if platform.system() in ["Linux", "Darwin"]:  # Linux or Mac
+            try:
+                result = subprocess.run(["antiword", file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                text_content = result.stdout.decode('utf-8')
+                if result.returncode != 0:
+                    raise Exception(f"antiword error: {result.stderr.decode('utf-8')}")
+            except Exception as e:
+                print(f"[ERROR] Antiword failed: {e}")
+                print(f"Error processing .doc file: {e}")
+                text_content = ""  # Ensure it's not sent empty to OpenAI
+        else:
+            print("[WARNING] .doc file processing is not supported on this platform.")
+            # If on Windows or other platform without antiword
+            print(f"Warning: .doc file processing is not supported on this platform. Skipping file: {file}")
+            text_content = ""
+
+    return text_content
+
+def match_schools_with_openai(parsed_info, target_school_list):
+    """
+    Use OpenAI to semantically match schools from the parsed resume against the target school list.
+    """
+    print("\n[INFO] Starting semantic school name matching using OpenAI...")
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    # Format target schools into a readable block
+    target_schools_str = "\n".join(target_school_list)
+
+    # Prepare input for OpenAI
+    phd_school = parsed_info.get('phd_school', 'NA')
+    master_school = parsed_info.get('master_school', 'NA')
+    bachelor_school = parsed_info.get('bachelor_school', 'NA')
+
+    # Refined prompt
+    prompt = (
+        "You are a professional school name matcher. Compare each school name from the resume against the target school list.\n"
+        "Tasks:\n"
+        "1. For each school, find the best match in the target school list based on semantic similarity.\n"
+        "2. Treat synonyms or alternative names (e.g., 麻省理工学院, 麻省理工學院, 马萨诸塞理工学院, MIT) as a match.\n"
+        "3. Return the match status ('Match' or 'Not Match') for each school (PhD, Master's, Bachelor's).\n"
+        "4. If no match is found, return 'Not Match'.\n\n"
+        "Resume Schools:\n"
+        f"- PhD: {phd_school}\n"
+        f"- Master's: {master_school}\n"
+        f"- Bachelor's: {bachelor_school}\n\n"
+        "Target Schools:\n"
+        f"{target_schools_str}\n\n"
+        "Return the results in JSON format with the following keys:\n"
+        "- 'phd_match_status': 'Match' or 'Not Match'\n"
+        "- 'master_match_status': 'Match' or 'Not Match'\n"
+        "- 'bachelor_match_status': 'Match' or 'Not Match'\n"
+    )
+
+    # Call OpenAI API
+    try:
+        print("[INFO] Sending semantic school name matching prompt to OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # Extract and parse the message content from OpenAI response
+        raw_response = completion.choices[0].message.content
+        print(f"[DEBUG] OpenAI response for school matching:\n{raw_response}")
+
+        # Clean and parse the JSON response
+        # cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        # cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)  # Remove trailing commas
+        cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)  # Remove trailing commas
+
+        match_results = json.loads(cleaned_content)
+
+        # Update parsed_info with match statuses
+        parsed_info['phd_match_status'] = match_results.get('phd_match_status', 'Not Match')
+        parsed_info['master_match_status'] = match_results.get('master_match_status', 'Not Match')
+        parsed_info['bachelor_match_status'] = match_results.get('bachelor_match_status', 'Not Match')
+        
+        print("[INFO] Finished semantic school name matching.")
+        print(f"[INFO] PhD Match Status: {parsed_info['phd_match_status']}")
+        print(f"[INFO] Master's Match Status: {parsed_info['master_match_status']}")
+        print(f"[INFO] Bachelor's Match Status: {parsed_info['bachelor_match_status']}")
+
+    except Exception as e:
+        print(f"[ERROR] Semantic school name matching failed: {e}")
+        parsed_info['phd_match_status'] = 'Not Match'
+        parsed_info['master_match_status'] = 'Not Match'
+        parsed_info['bachelor_match_status'] = 'Not Match'
+
+    return parsed_info
+
+def determine_award_status(matched_awards):
+    """
+    Determine the final award status based on matched awards.
+    
+    Parameters:
+    - matched_awards: List of dictionaries containing matched awards and confidence levels.
+    
+    Returns:
+    - award_status: A string representing the final award status.
+    """
+    list1_found = False
+    list2_found = False
+
+    for match in matched_awards:
+        if match.get("confidence") in ["High", "Medium"]:
+            if match.get("list") == 1:
+                list1_found = True
+            elif match.get("list") == 2:
+                list2_found = True
+
+    # Determine final award status
+    if list1_found and list2_found:
+        return "天才"  # Represents both list 1 and list 2
+    elif list1_found:
+        return "竞赛人才"  # Represents list 1
+    elif list2_found:
+        return "顶会人才"  # Represents list 2
+    else:
+        return ""
+
+def match_awards_with_openai(resume_awards, award_list, award_list2):
+    """
+    Use OpenAI to match resume awards against two reference lists with high accuracy.
+    """
+    print("\n[INFO] Starting award matching using OpenAI...")
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    
+    # Format lists into readable blocks
+    award_list_str = "\n".join(award_list)
+    award_list2_str = "\n".join(award_list2)
+    resume_awards_str = "\n".join(resume_awards)
+
+    # Refined prompt with clear and concise instructions
+    prompt = (
+        "You are an award classification assistant. Compare each award in the 'Resume Awards' list against two reference lists:\n"
+        "1. List 1 (竞赛人才): Awards representing competitions and challenges.\n"
+        "2. List 2 (顶会人才): Awards for top-tier conferences and research achievements.\n\n"
+        "Tasks:\n"
+        "1. For each award in the 'Resume Awards', find if it matches (exact or semantically) any award in List 1 or List 2.\n"
+        "2. If it matches an award in List 1, mark it as 'list': 1.\n"
+        "3. If it matches an award in List 2, mark it as 'list': 2.\n"
+        "4. If it matches both lists, mark it as 'list': 'Both'.\n"
+        "5. If no match is found, set 'list': 'No Awards'.\n\n"
+        "Return the results in JSON array format. Each entry should contain:\n"
+        "- 'resume_award': The award from the resume.\n"
+        "- 'matched_award': The closest matching award from List 1 or List 2.\n"
+        "- 'list': 1, 2, 'Both', or 'No Awards'.\n"
+        "- 'confidence': 'High' if the match is exact or very close, 'Medium' otherwise.\n\n"
+        "Resume Awards:\n"
+        f"{resume_awards_str}\n\n"
+        "List 1 (竞赛人才):\n"
+        f"{award_list_str}\n\n"
+        "List 2 (顶会人才):\n"
+        f"{award_list2_str}\n\n"
+        "Return only valid JSON output."
+    )
+
+    # Call OpenAI API
+    try:
+        print("[INFO] Sending award matching prompt to OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        # Extract and parse the message content from OpenAI response
+        raw_response = completion.choices[0].message.content
+        print(f"[DEBUG] OpenAI response for award matching:\n{raw_response}")
+
+        # Clean the response content by removing any backticks, "json" tags, or extra characters
+        # cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        # # Remove trailing commas before closing braces/brackets
+        # cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)
+        
+        cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)  # Remove trailing commas
+
+      
+        print("[INFO] Finished award matching.")
+        print(f"\nOpenAI Response:\n{cleaned_content}")
+        return json.loads(cleaned_content)
+
+    except Exception as e:
+        print(f"[ERROR] Award matching failed: {e}")
+        return []
+
+def parse_content(text_content, target_school_list, award_list, award_list2):
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    system_message = (
+        "You are a professional-grade resume parser. "
+        "You will be provided with text content extracted from a resume file. "
+        "Your task is to return clean, accurate JSON formatted data with the following keys: "
+        "- 'education_level' (highest level of education achieved: Bachelor's, Master's, or PhD)\n"
+        "- 'name' (full name of the candidate)\n"
+        "- 'major' (major studied in the highest level of education in Simplified Chinese)\n"
+        "- 'grad_year' (graduation year of the highest education level. If only a single year is provided, infer whether it represents the year of entry or graduation based on context. For instance, a PhD program typically lasts 4 years, and a Master's program lasts 2 years.)\n"
+        "- 'phd_school' (in Simplified Chinese only)\n"
+        "- 'master_school' (in Simplified Chinese only)\n"
+        "- 'bachelor_school' (in Simplified Chinese only)\n"
+        "- 'awards' (list of awards or achievements mentioned in the resume, normalized if possible)\n"
+        "If not applicable, fill the fields with 'NA'."
+    )
+
+    completion = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": text_content},
+        ],
+    )
+
+    raw_response = completion.choices[0].message.content
+    print(f"\n[DEBUG] OpenAI response for resume parsing:\n{raw_response}")
+
+    cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+    cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)  # Remove trailing commas
+
+    try:
+        parsed_info = json.loads(cleaned_content)
+
+        # Perform semantic school matching
+        parsed_info = match_schools_with_openai(parsed_info, target_school_list)
+
+        # Extract and match awards
+        parsed_awards = parsed_info.get("awards", [])
+        
+        matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
+        parsed_info["award_status"] = determine_award_status(matched_awards)
+
+
+        return parsed_info
+
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] JSON decoding failed: {e}\n[DEBUG] Cleaned response:\n{cleaned_content}")
+        raise ValueError("Error parsing OpenAI response")
+
+
+
+# Function to sanitize filename components
+def sanitize_filename_component(component):
+    if component is None:
+        component = 'Unknown'  # Default value if None
+    elif isinstance(component, int):
+        component = str(component)  # Convert integers to strings
+    return str(component).replace('/', '_').replace('\\', '_').replace(':', '_').strip()
+
+def generate_filename(parsed_info, args):
+    def sanitize_filename_component(component):
+        if component is None:
+            return "Unknown"
+        return str(component).replace("/", "_").replace("\\", "_").replace(":", "_").strip()
+
+    name = sanitize_filename_component(parsed_info.get("name", "Unknown Name").strip())
+    major = sanitize_filename_component(parsed_info.get("major", "Unknown Major").strip())
+    grad_year = sanitize_filename_component(parsed_info.get("grad_year", "Unknown Year"))
+    education_level = parsed_info.get("education_level", "Bachelor's").strip()
+    school = {
+        "PhD": parsed_info.get("phd_school", "Unknown School"),
+        "Master's": parsed_info.get("master_school", "Unknown School"),
+        "Bachelor's": parsed_info.get("bachelor_school", "Unknown School"),
+    }.get(education_level, "Unknown School")
+
+    school = sanitize_filename_component(school)
+
+    # Use match statuses from OpenAI matching
+    phd_match_status = parsed_info.get("phd_match_status", "Not Match")
+    master_match_status = parsed_info.get("master_match_status", "Not Match")
+    bachelor_match_status = parsed_info.get("bachelor_match_status", "Not Match")
+
+    # Final match logic
+    if education_level == "PhD":
+        final_match_status = "Match" if phd_match_status == "Match" else "Not Match"
+    elif education_level == "Master's":
+        final_match_status = (
+            "Match" if master_match_status == "Match" and bachelor_match_status == "Match" else "Not Match"
+        )
+    else:  # Bachelor's
+        final_match_status = "Match" if bachelor_match_status == "Match" else "Not Match"
+
+    education_level_ch = {"Bachelor's": "本科", "Master's": "硕士", "PhD": "博士"}.get(education_level, "未知")
+    job_type = "实习" if grad_year.isdigit() and int(grad_year) > 2024 else "全职"
+    award_status = parsed_info.get("award_status", "")
+
+    components = [
+        final_match_status,
+        job_type,
+        education_level_ch,
+        school,
+        grad_year,
+        major,
+        name,
+    ]
+
+    if award_status:
+        components.append(award_status)
+
+    filename = "-".join(filter(None, components))
+    return filename

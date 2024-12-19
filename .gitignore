@@ -2,3 +2,6 @@
 output
 __pycache__
 .vscode
+test_resume
+test_resume1
+.DS_Store
