@@ -110,7 +110,7 @@ def match_schools_with_openai(parsed_info, target_school_list):
         "You are a professional school name matcher. Compare each school name from the resume against the target school list.\n"
         "Tasks:\n"
         "1. For each school, find the best match in the target school list based on semantic similarity.\n"
-        "2. Treat synonyms or alternative names (e.g., 麻省理工学院, 麻省理工學院, 马萨诸塞理工学院, MIT) as a match.\n"
+        "2. Treat synonyms or alternative names as a match. For example, if the resume lists a school name with a country or city prefix (e.g., 新加坡南洋理工大学), treat it as the same as 南洋理工大学.\n"
         "3. Return the match status ('Match' or 'Not Match') for each school (PhD, Master's, Bachelor's).\n"
         "4. If no match is found, return 'Not Match'.\n\n"
         "Resume Schools:\n"
@@ -242,24 +242,49 @@ def match_awards_with_openai(resume_awards, award_list, award_list2):
 
 def parse_content(text_content, target_school_list, award_list, award_list2):
     """
-    Send extracted resume text to OpenAI for parsing into a structured JSON.
-    Then, perform school name matching and award classification.
+    Send extracted resume text to OpenAI for parsing into a structured JSON with the required fields.
+    Then perform school name matching, award classification, and return parsed_info dict.
     """
+
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+    # Updated system message instructions
     system_message = (
         "You are a professional-grade resume parser. "
-        "You will be provided with text content extracted from a resume file. "
-        "Your task is to return clean, accurate JSON formatted data with the following keys: "
-        "- 'education_level' (highest level of education achieved: Bachelor's, Master's, or PhD)\n"
-        "- 'name' (full name of the candidate)\n"
-        "- 'major' (major studied in the highest level of education in Simplified Chinese)\n"
-        "- 'grad_year' (graduation year of the highest education level. If only a single year is provided, infer whether it represents the year of entry or graduation based on context. For instance, a PhD program typically lasts 4 years, and a Master's program lasts 2 years.)\n"
-        "- 'phd_school' (in Simplified Chinese only)\n"
-        "- 'master_school' (in Simplified Chinese only)\n"
-        "- 'bachelor_school' (in Simplified Chinese only)\n"
-        "- 'awards' (list of awards or achievements mentioned in the resume, normalized if possible)\n"
-        "If not applicable, fill the fields with 'NA'."
+        "You will be provided with text content extracted from a candidate's resume. Your job is to analyze and return a JSON object containing specific fields.\n\n"
+        "Your JSON output keys:\n"
+        "1. 'education_level': The highest education level (options: '本科', '硕士', '博士', or 'N/A' if unknown). Determine based on the resume.\n"
+        "   - If the candidate has a PhD, return '博士'\n"
+        "   - If the candidate has a Master's as the highest degree, return '硕士'\n"
+        "   - If the candidate has a Bachelor's as the highest degree, return '本科'\n"
+        "   - If unsure, return 'N/A'\n\n"
+        "2. 'name': The candidate's full name as found on the resume. If it's in English, return English. If in Chinese, return Chinese.\n\n"
+        "3. 'major': The major (program of study) of the HIGHEST education level, in Simplified Chinese.\n\n"
+        "4. 'grad_year': The graduation year of the highest education level:\n"
+        "   - If a year range is given (e.g., '08/2022 – Present'), infer that the candidate is still studying and estimate graduation year based on:\n"
+        "     - PhD: 4 years after the start year\n"
+        "     - Master's: 2 years after the start year\n"
+        "     - Bachelor's: 4 years after the start year\n"
+        "   - If only one year is given without range, try to infer if it's start or grad year. If uncertain, assume it's the grad year.\n\n"
+        "5. 'phd_school', 'master_school', 'bachelor_school': The schools for each degree the candidate has, in Simplified Chinese.\n"
+        "   - If the school is known internationally and a recognized Chinese name exists, use that. Example:\n"
+        "     - 'Nanyang Technological University Singapore' -> '南洋理工大学'\n"
+        "     - 'Zhejiang University' -> '浙江大学'\n"
+        "   - If the school name is only in English and no known Chinese translation is commonly used, return the name as is but ideally in Simplified Chinese if known.\n"
+        "   - If the candidate does not hold that degree level, return 'NA'.\n\n"
+        "6. 'awards': A list of awards the candidate achieved, normalized if possible.\n\n"
+        "7. 'candidate_location': The candidate's country location in Simplified Chinese. Determine by priority:\n"
+        "   1. If a location (country) is clearly stated at the top (e.g. resume header), use that.\n"
+        "   2. If not found, use the highest education institution's country location.\n"
+        "   3. If the most recent work experience is more recent than the graduation year, use that work experience's country location.\n"
+        "   If none can be determined, return '未知'. Examples of countries in Simplified Chinese: '美国', '中国', '英国', etc.\n\n"
+        "8. 'is_qs50': If the highest degree institution is in top 50 QS ranking, return 'QS50'. Otherwise '非QS50'. If unsure, assume '非QS50'.\n\n"
+        "9. 'is_chinese_name': 'Yes' if the candidate's name is Chinese, 'No' otherwise.\n\n"
+        "10. The logic for determining the final file name outside of this function is based on these values, so ensure accuracy.\n\n"
+        "Additional Notes:\n"
+        "- Do not return 'NA' for a school if it is mentioned. Only return 'NA' if that degree level does not exist.\n"
+        "- Awards: just list them. The classification (竞赛人才, 顶会人才, 天才) will be handled after the award matching step.\n"
+        "- Make sure the output is strictly valid JSON without extra commentary.\n"
     )
 
     print("[INFO] Sending resume text to OpenAI for parsing...")
@@ -269,12 +294,14 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
             {"role": "system", "content": system_message},
             {"role": "user", "content": text_content},
         ],
+        temperature=0,  # reduce randomness for consistency
     )
 
     raw_response = completion.choices[0].message.content
     print("[DEBUG] Raw OpenAI resume parsing response:")
     print(raw_response)
 
+    # Clean the response for JSON parsing
     cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
     cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)
 
@@ -284,10 +311,10 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         print(f"[ERROR] JSON decoding failed: {e}\n[DEBUG] Cleaned response:\n{cleaned_content}")
         raise ValueError("Error parsing OpenAI response")
 
-    # Perform semantic school matching
+    # Perform semantic school matching (updates the parsed_info with match status)
     parsed_info = match_schools_with_openai(parsed_info, target_school_list)
 
-    # Match awards
+    # Match awards and determine award status
     parsed_awards = parsed_info.get("awards", [])
     matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
     parsed_info["award_status"] = determine_award_status(matched_awards)
@@ -302,52 +329,114 @@ def sanitize_filename_component(component):
 
 def generate_filename(parsed_info, args):
     """
-    Generate a structured filename using parsed resume info:
-    Format: [MatchStatus]-[JobType]-[EducationLevelCH]-[School]-[GradYear]-[Major]-[Name]-[AwardStatus(optional)]
+    Generate a structured filename using parsed resume info.
+
+    Format:
+    [MatchStatus]-[JobType]-[EducationLevelCH]-[Name]-[School]-[Major]-[GradYear]-[AwardStatus(optional)]-[CandidateLocation]-[QS50(if applicable)]
+
+    Where:
+    - MatchStatus: "Match" or "Not Match" based on the logic:
+      * If highest is PhD: match if phd_school matches target list
+      * If highest is Master's: match if master_school and bachelor_school match
+      * If highest is Bachelor's: match if bachelor_school matches
+
+    - JobType: "实习" if grad_year > 2024, else "全职"
+
+    - EducationLevelCH: "本科", "硕士", "博士" or "N/A" if unknown
+
+    - Name: Candidate name as given (Chinese or English)
+
+    - School: Highest level school in Simplified Chinese
+
+    - Major: in Simplified Chinese
+
+    - GradYear: The inferred or calculated graduation year
+
+    - AwardStatus (optional): "竞赛人才" or "顶会人才" or "天才", if applicable, otherwise omit
+
+    - CandidateLocation: The candidate's country location in simplified Chinese or "未知"
+
+    - QS50: "QS50" if top 50, else omit
     """
+
     name = sanitize_filename_component(parsed_info.get("name", "Unknown Name"))
     major = sanitize_filename_component(parsed_info.get("major", "Unknown Major"))
     grad_year = sanitize_filename_component(parsed_info.get("grad_year", "Unknown Year"))
-    education_level = parsed_info.get("education_level", "Bachelor's").strip()
+    education_level_ch = parsed_info.get("education_level", "N/A").strip()
 
-    school_lookup = {
-        "PhD": parsed_info.get("phd_school", "Unknown School"),
-        "Master's": parsed_info.get("master_school", "Unknown School"),
-        "Bachelor's": parsed_info.get("bachelor_school", "Unknown School"),
-    }
-    school = sanitize_filename_component(school_lookup.get(education_level, "Unknown School"))
+    # Schools
+    phd_school = parsed_info.get("phd_school", "NA")
+    master_school = parsed_info.get("master_school", "NA")
+    bachelor_school = parsed_info.get("bachelor_school", "NA")
 
+    # Determine highest education level to pick the school
+    if education_level_ch == "博士":
+        school = phd_school
+        level = "PhD"
+    elif education_level_ch == "硕士":
+        school = master_school
+        level = "Master's"
+    elif education_level_ch == "本科":
+        school = bachelor_school
+        level = "Bachelor's"
+    else:
+        # If we cannot determine education level, set a default
+        school = "NA"
+        level = "N/A"
+
+    school = sanitize_filename_component(school)
+
+    # Determine match status
     phd_match_status = parsed_info.get("phd_match_status", "Not Match")
     master_match_status = parsed_info.get("master_match_status", "Not Match")
     bachelor_match_status = parsed_info.get("bachelor_match_status", "Not Match")
 
-    # Determine final match status based on the highest education level
-    if education_level == "PhD":
+    if level == "PhD":
         final_match_status = "Match" if phd_match_status == "Match" else "Not Match"
-    elif education_level == "Master's":
-        # Example logic: require Master's and Bachelor's match to consider it a match
+    elif level == "Master's":
         final_match_status = "Match" if (master_match_status == "Match" and bachelor_match_status == "Match") else "Not Match"
-    else:  # Bachelor's
+    elif level == "Bachelor's":
         final_match_status = "Match" if bachelor_match_status == "Match" else "Not Match"
+    else:
+        # If we don't know the level, can't determine match accurately
+        # Default to "Not Match"
+        final_match_status = "Not Match"
 
-    education_level_ch_map = {"Bachelor's": "本科", "Master's": "硕士", "PhD": "博士"}
-    education_level_ch = education_level_ch_map.get(education_level, "未知")
+    # Job type based on grad_year
+    # If grad_year is numeric and > 2024 => 实习, else 全职
+    job_type = "全职"
+    if grad_year.isdigit():
+        if int(grad_year) > 2024:
+            job_type = "实习"
 
-    job_type = "实习" if grad_year.isdigit() and int(grad_year) > 2024 else "全职"
     award_status = parsed_info.get("award_status", "")
+    candidate_location = sanitize_filename_component(parsed_info.get("candidate_location", ""))
+    # If candidate_location is empty or NA, skip
+    if candidate_location in ["", "NA"]:
+        candidate_location = ""
+
+    is_qs50 = parsed_info.get("is_qs50", "")
+    qs50_label = "QS50" if is_qs50 == "QS50" else ""
 
     components = [
         final_match_status,
         job_type,
         education_level_ch,
+        name,
         school,
-        grad_year,
         major,
-        name
+        grad_year,
     ]
 
     if award_status:
         components.append(award_status)
 
+    if candidate_location:
+        components.append(candidate_location)
+
+    if qs50_label:
+        components.append(qs50_label)
+
     filename = "-".join(filter(None, components))
     return filename
+
