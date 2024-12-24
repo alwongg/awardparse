@@ -14,6 +14,63 @@ import subprocess
 
 load_dotenv()
 
+from difflib import SequenceMatcher
+
+def exact_match(school_name, target_list):
+    """Check for exact string match ignoring leading/trailing whitespace."""
+    school_stripped = school_name.strip()
+    return any(school_stripped == t.strip() for t in target_list)
+
+def fuzzy_match(school_name, target_list, threshold=0.9):
+    """
+    Use difflib to see if there's a sufficiently close match (e.g. >= 0.9).
+    Return True if we find a match above threshold, else False.
+    """
+    for t in target_list:
+        ratio = SequenceMatcher(None, school_name.strip(), t.strip()).ratio()
+        if ratio >= threshold:
+            return True
+    return False
+
+def check_local_school_matches(parsed_info, target_school_list, fuzzy_threshold=0.9):
+    """
+    Check local matches for PhD, Master's, Bachelor's schools.
+    1. If exact match or fuzzy match >= threshold, mark 'Match'.
+    2. Otherwise, mark 'Not Match'.
+    Returns a list of degrees that are still 'Not Match' and need OpenAI semantic matching.
+    """
+    print("[DEBUG] Performing local (exact/fuzzy) school matching...")
+
+    not_matched_degrees = []
+
+    for degree in ['phd', 'master', 'bachelor']:
+        school_key = f"{degree}_school"
+        match_status_key = f"{degree}_match_status"
+
+        school_name = parsed_info.get(school_key, 'NA')
+        if school_name == 'NA':
+            print(f"[DEBUG] {degree.capitalize()} school is 'NA' (not provided). Marking as 'Not Match'.")
+            parsed_info[match_status_key] = 'Not Match'
+            continue
+
+        print(f"[DEBUG] Checking local match for {degree.capitalize()} school: '{school_name}'")
+
+        # 1) Exact match check
+        if exact_match(school_name, target_school_list):
+            parsed_info[match_status_key] = 'Match'
+            print(f"[DEBUG] Exact match found locally for {degree.capitalize()} school: '{school_name}'")
+        else:
+            # 2) Fuzzy match check
+            if fuzzy_match(school_name, target_school_list, fuzzy_threshold):
+                parsed_info[match_status_key] = 'Match'
+                print(f"[DEBUG] Fuzzy match (>{fuzzy_threshold}) found locally for {degree.capitalize()} school: '{school_name}'")
+            else:
+                parsed_info[match_status_key] = 'Not Match'
+                not_matched_degrees.append(degree)
+                print(f"[DEBUG] No local match for {degree.capitalize()} school: '{school_name}'. Will need OpenAI matching.")
+
+    return not_matched_degrees, parsed_info
+
 def extract_text_from_file(file):
     """Extract text from various file types (.pdf, .docx, .doc) with fallback OCR."""
     print(f"\n[INFO] Starting text extraction for file: {file}")
@@ -27,7 +84,7 @@ def extract_text_from_file(file):
     elif file_extension == ".doc":
         text_content = extract_text_from_doc(file)
     else:
-        print(f"[WARNING] Unsupported file extension: {file_extension}. Returning empty text.")
+        print(f"[WARNING] Unsupported file extension '{file_extension}'. Returning empty text.")
     
     return text_content
 
@@ -44,15 +101,18 @@ def extract_text_from_pdf(file):
         if len(text_content.strip()) == 0:
             raise ValueError("No text extracted from PDF via MuPDF.")
     except Exception as e:
-        print(f"[ERROR] MuPDF extraction failed: {e}\n[INFO] Falling back to OCR for PDF...")
+        print(f"[ERROR] MuPDF extraction failed: {e}")
+        print("[INFO] Falling back to OCR for PDF...")
         text_content = ocr_pdf(file)
     return text_content
 
 def ocr_pdf(file):
     """Perform OCR on a PDF file using pdf2image and pytesseract."""
+    print("[DEBUG] Performing OCR on PDF using pdf2image + pytesseract...")
     text_content = ""
     images = convert_from_path(file)
-    for image in images:
+    for i, image in enumerate(images, 1):
+        print(f"[DEBUG] OCR processing page {i}/{len(images)}...")
         text_content += pytesseract.image_to_string(image)
     return text_content
 
@@ -66,12 +126,13 @@ def extract_text_from_docx(file):
             text_content += paragraph.text + "\n"
         
         if not text_content.strip():
-            print("[WARNING] No text via python-docx. Trying docx2txt...")
+            print("[WARNING] No text extracted via python-docx. Trying docx2txt...")
             text_content = docx2txt_process(file)
             if not text_content.strip():
                 raise ValueError("No text extracted via docx2txt either.")
     except Exception as e:
-        print(f"[ERROR] DOCX extraction failed: {e}\n[INFO] Falling back to OCR for DOCX...")
+        print(f"[ERROR] DOCX extraction failed: {e}")
+        print("[INFO] Falling back to OCR for DOCX...")
         text_content = ocr_pdf(file)  # Using same OCR method as PDF for simplicity
     
     return text_content
@@ -108,16 +169,13 @@ def match_schools_with_openai(parsed_info, target_school_list):
 
     prompt = (
         "You are a professional school name matcher. Compare each school name from the resume against the target school list.\n"
-        "Tasks:\n"
-        "1. For each school, find the best match in the target school list based on semantic similarity.\n"
-        "2. Treat synonyms or alternative names as a match. For example, if the resume lists a school name with a country or city prefix (e.g., 新加坡南洋理工大学), treat it as the same as 南洋理工大学.\n"
-        "3. Return the match status ('Match' or 'Not Match') for each school (PhD, Master's, Bachelor's).\n"
-        "4. If no match is found, return 'Not Match'.\n\n"
+        "Task:\n"
+        "For each school in the resume, check if it is found in the target school list. If the strings are literally the same (ignoring spaces/punctuation), return Match Otherwise check synonyms, alternative names, or partial matches. If no match, return Not Match.\n"
         "Resume Schools:\n"
-        f"- PhD: {phd_school}\n"
-        f"- Master's: {master_school}\n"
-        f"- Bachelor's: {bachelor_school}\n\n"
-        "Target Schools:\n"
+        f"- Phd school: {phd_school}\n"
+        f"- Master school: {master_school}\n"
+        f"- Bachelor school: {bachelor_school}\n\n"
+        "Target school list:\n"
         f"{target_schools_str}\n\n"
         "Return the results in JSON format with the following keys:\n"
         "- 'phd_match_status': 'Match' or 'Not Match'\n"
@@ -165,19 +223,98 @@ def determine_award_status(matched_awards):
     - If only list 2 awards are matched, return "顶会人才".
     - Otherwise, return "".
     """
+    print("[DEBUG] Determining final award status from matched awards...")
     list1_found = any(match.get("confidence") in ["High", "Medium"] and match.get("list") == 1 
                       for match in matched_awards)
     list2_found = any(match.get("confidence") in ["High", "Medium"] and match.get("list") == 2
                       for match in matched_awards)
 
     if list1_found and list2_found:
+        print("[DEBUG] Both list1 and list2 awards matched. Returning '天才'.")
         return "天才"
     elif list1_found:
+        print("[DEBUG] Only list1 awards matched. Returning '竞赛人才'.")
         return "竞赛人才"
     elif list2_found:
+        print("[DEBUG] Only list2 awards matched. Returning '顶会人才'.")
         return "顶会人才"
     else:
+        print("[DEBUG] No awards matched. Returning empty string.")
         return ""
+
+def match_schools_with_openai_partially(parsed_info, target_school_list, not_matched_degrees):
+    """
+    Call OpenAI only for degrees in `not_matched_degrees`.
+    Keep existing 'Match' statuses as is, do not override them.
+    """
+    print("\n[INFO] Starting partial semantic school matching via OpenAI...")
+
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    target_schools_str = "\n".join(target_school_list)
+
+    prompt_lines = []
+    if 'phd' in not_matched_degrees:
+        prompt_lines.append(f"- PhD: {parsed_info.get('phd_school', 'NA')}")
+    if 'master' in not_matched_degrees:
+        prompt_lines.append(f"- Master's: {parsed_info.get('master_school', 'NA')}")
+    if 'bachelor' in not_matched_degrees:
+        prompt_lines.append(f"- Bachelor's: {parsed_info.get('bachelor_school', 'NA')}")
+
+    prompt_schools = "\n".join(prompt_lines)
+
+    prompt = (
+        "You are a professional school name matcher. Compare each school name from the resume (below) "
+        "against the target school list.\n"
+        "If the strings are literally the same ignoring whitespace/punctuation, return 'Match'. "
+        "Otherwise check synonyms, alt names, partial matches. If none match, return 'Not Match'.\n\n"
+        "Resume Schools:\n"
+        f"{prompt_schools}\n\n"
+        "Target school list:\n"
+        f"{target_schools_str}\n\n"
+        "Return the results in JSON format with these keys:\n"
+        "- 'phd_match_status': 'Match' or 'Not Match'\n"
+        "- 'master_match_status': 'Match' or 'Not Match'\n"
+        "- 'bachelor_match_status': 'Match' or 'Not Match'\n"
+    )
+
+    try:
+        print("[INFO] Sending partial prompt for school matching to OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw_response = completion.choices[0].message.content
+
+        print("[DEBUG] Raw partial OpenAI school matching response:")
+        print(raw_response)
+
+        cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)
+
+        match_results = json.loads(cleaned_content)
+
+        if 'phd' in not_matched_degrees:
+            parsed_info['phd_match_status'] = match_results.get('phd_match_status', 'Not Match')
+        if 'master' in not_matched_degrees:
+            parsed_info['master_match_status'] = match_results.get('master_match_status', 'Not Match')
+        if 'bachelor' in not_matched_degrees:
+            parsed_info['bachelor_match_status'] = match_results.get('bachelor_match_status', 'Not Match')
+
+        print("[INFO] Partial school matching completed. Updated statuses:")
+        if 'phd' in not_matched_degrees:
+            print(f"  PhD Match: {parsed_info['phd_match_status']}")
+        if 'master' in not_matched_degrees:
+            print(f"  Master Match: {parsed_info['master_match_status']}")
+        if 'bachelor' in not_matched_degrees:
+            print(f"  Bachelor Match: {parsed_info['bachelor_match_status']}")
+        return parsed_info
+
+    except Exception as e:
+        print(f"[ERROR] Partial school matching failed: {e}")
+        for deg in not_matched_degrees:
+            key = f"{deg}_match_status"
+            parsed_info[key] = 'Not Match'
+        return parsed_info
 
 def match_awards_with_openai(resume_awards, award_list, award_list2):
     """
@@ -232,8 +369,10 @@ def match_awards_with_openai(resume_awards, award_list, award_list2):
         matched_awards = json.loads(cleaned_content)
         print("[INFO] Award matching completed.")
         for m in matched_awards:
-            print(f"[INFO] Resume Award: '{m.get('resume_award')}' => Matched: '{m.get('matched_award')}', "
-                  f"List: {m.get('list')}, Confidence: {m.get('confidence')}")
+            print(
+                f"[INFO] Resume Award: '{m.get('resume_award')}' => Matched: '{m.get('matched_award')}', "
+                f"List: {m.get('list')}, Confidence: {m.get('confidence')}"
+            )
         return matched_awards
 
     except Exception as e:
@@ -241,14 +380,8 @@ def match_awards_with_openai(resume_awards, award_list, award_list2):
         return []
 
 def parse_content(text_content, target_school_list, award_list, award_list2):
-    """
-    Send extracted resume text to OpenAI for parsing into a structured JSON with the required fields.
-    Then perform school name matching, award classification, and return parsed_info dict.
-    """
-
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    # Updated system message instructions
     system_message = (
         "You are a professional-grade resume parser. "
         "You will be provided with text content extracted from a candidate's resume. Your job is to analyze and return a JSON object containing specific fields.\n\n"
@@ -258,7 +391,7 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         "   - If the candidate has a Master's as the highest degree, return '硕士'\n"
         "   - If the candidate has a Bachelor's as the highest degree, return '本科'\n"
         "   - If unsure, return 'N/A'\n\n"
-        "2. 'name': The candidate's full name as found on the resume. If it's in English, return English. If in Chinese, return Chinese.\n\n"
+        "2. 'name': The candidate's full name as found on the resume.\n\n"
         "3. 'major': The major (program of study) of the HIGHEST education level, in Simplified Chinese.\n\n"
         "4. 'grad_year': The graduation year of the highest education level:\n"
         "   - If a year range is given (e.g., '08/2022 – Present'), infer that the candidate is still studying and estimate graduation year based on:\n"
@@ -274,12 +407,12 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         "   - If the candidate does not hold that degree level, return 'NA'.\n\n"
         "6. 'awards': A list of awards the candidate achieved, normalized if possible.\n\n"
         "7. 'candidate_location': The candidate's country location in Simplified Chinese. Determine by priority:\n"
-        "   1. If a location (country) is clearly stated at the top (e.g. resume header), use that.\n"
+        "   1. If a location is clearly stated at the top (e.g. resume header), use the country location.\n"
         "   2. If not found, use the highest education institution's country location.\n"
         "   3. If the most recent work experience is more recent than the graduation year, use that work experience's country location.\n"
         "   If none can be determined, return '未知'. Examples of countries in Simplified Chinese: '美国', '中国', '英国', etc.\n\n"
         "8. 'is_qs50': If the highest degree institution is in top 50 QS ranking, return 'QS50'. Otherwise '非QS50'. If unsure, assume '非QS50'.\n\n"
-        "9. 'is_chinese_name': 'Yes' if the candidate's name is Chinese, 'No' otherwise.\n\n"
+        "9. 'is_chinese_name': 'Yes' if the candidate's name is Chinese. Use the 百家姓 (Hundred Family Surnames) as the standard reference for identifying Chinese names. Additionally, if the name consists entirely of Chinese characters, return 'Yes' without further checks. 'No' otherwise.\n\n"
         "10. The logic for determining the final file name outside of this function is based on these values, so ensure accuracy.\n\n"
         "Additional Notes:\n"
         "- Do not return 'NA' for a school if it is mentioned. Only return 'NA' if that degree level does not exist.\n"
@@ -287,38 +420,44 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         "- Make sure the output is strictly valid JSON without extra commentary.\n"
     )
 
-    print("[INFO] Sending resume text to OpenAI for parsing...")
+    print("[DEBUG] Sending resume text to OpenAI for structured parsing...")
+
     completion = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system_message},
             {"role": "user", "content": text_content},
         ],
-        temperature=0,  # reduce randomness for consistency
+        temperature=0,
     )
 
     raw_response = completion.choices[0].message.content
     print("[DEBUG] Raw OpenAI resume parsing response:")
     print(raw_response)
 
-    # Clean the response for JSON parsing
     cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
     cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)
 
     try:
         parsed_info = json.loads(cleaned_content)
     except json.JSONDecodeError as e:
-        print(f"[ERROR] JSON decoding failed: {e}\n[DEBUG] Cleaned response:\n{cleaned_content}")
+        print(f"[ERROR] JSON decoding failed: {e}")
         raise ValueError("Error parsing OpenAI response")
 
-    # Perform semantic school matching (updates the parsed_info with match status)
-    parsed_info = match_schools_with_openai(parsed_info, target_school_list)
+    # Local check for schools (exact/fuzzy)
+    not_matched_degrees, parsed_info = check_local_school_matches(
+        parsed_info, target_school_list, fuzzy_threshold=0.9
+    )
 
-    # Match awards and determine award status
+    if not_matched_degrees:
+        parsed_info = match_schools_with_openai_partially(parsed_info, target_school_list, not_matched_degrees)
+
+    # Match awards & determine final award status
     parsed_awards = parsed_info.get("awards", [])
     matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
     parsed_info["award_status"] = determine_award_status(matched_awards)
 
+    print("[DEBUG] Completed parse_content flow. Returning parsed_info.")
     return parsed_info
 
 def sanitize_filename_component(component):
@@ -333,43 +472,19 @@ def generate_filename(parsed_info, args):
 
     Format:
     [MatchStatus]-[JobType]-[EducationLevelCH]-[Name]-[School]-[Major]-[GradYear]-[AwardStatus(optional)]-[CandidateLocation]-[QS50(if applicable)]
-
-    Where:
-    - MatchStatus: "Match" or "Not Match" based on the logic:
-      * If highest is PhD: match if phd_school matches target list
-      * If highest is Master's: match if master_school and bachelor_school match
-      * If highest is Bachelor's: match if bachelor_school matches
-
-    - JobType: "实习" if grad_year > 2024, else "全职"
-
-    - EducationLevelCH: "本科", "硕士", "博士" or "N/A" if unknown
-
-    - Name: Candidate name as given (Chinese or English)
-
-    - School: Highest level school in Simplified Chinese
-
-    - Major: in Simplified Chinese
-
-    - GradYear: The inferred or calculated graduation year
-
-    - AwardStatus (optional): "竞赛人才" or "顶会人才" or "天才", if applicable, otherwise omit
-
-    - CandidateLocation: The candidate's country location in simplified Chinese or "未知"
-
-    - QS50: "QS50" if top 50, else omit
     """
+    print("[DEBUG] Generating the final filename based on parsed_info...")
 
     name = sanitize_filename_component(parsed_info.get("name", "Unknown Name"))
     major = sanitize_filename_component(parsed_info.get("major", "Unknown Major"))
     grad_year = sanitize_filename_component(parsed_info.get("grad_year", "Unknown Year"))
     education_level_ch = parsed_info.get("education_level", "N/A").strip()
 
-    # Schools
     phd_school = parsed_info.get("phd_school", "NA")
     master_school = parsed_info.get("master_school", "NA")
     bachelor_school = parsed_info.get("bachelor_school", "NA")
 
-    # Determine highest education level to pick the school
+    # Determine highest education level
     if education_level_ch == "博士":
         school = phd_school
         level = "PhD"
@@ -380,7 +495,6 @@ def generate_filename(parsed_info, args):
         school = bachelor_school
         level = "Bachelor's"
     else:
-        # If we cannot determine education level, set a default
         school = "NA"
         level = "N/A"
 
@@ -394,24 +508,22 @@ def generate_filename(parsed_info, args):
     if level == "PhD":
         final_match_status = "Match" if phd_match_status == "Match" else "Not Match"
     elif level == "Master's":
-        final_match_status = "Match" if (master_match_status == "Match" and bachelor_match_status == "Match") else "Not Match"
+        final_match_status = ("Match"
+                              if (master_match_status == "Match"
+                                  and bachelor_match_status == "Match") else "Not Match")
     elif level == "Bachelor's":
         final_match_status = "Match" if bachelor_match_status == "Match" else "Not Match"
     else:
-        # If we don't know the level, can't determine match accurately
-        # Default to "Not Match"
         final_match_status = "Not Match"
 
-    # Job type based on grad_year
-    # If grad_year is numeric and > 2024 => 实习, else 全职
+    # Determine job type
     job_type = "全职"
     if grad_year.isdigit():
-        if int(grad_year) > 2024:
+        if int(grad_year) > 2025:
             job_type = "实习"
 
     award_status = parsed_info.get("award_status", "")
     candidate_location = sanitize_filename_component(parsed_info.get("candidate_location", ""))
-    # If candidate_location is empty or NA, skip
     if candidate_location in ["", "NA"]:
         candidate_location = ""
 
@@ -430,13 +542,11 @@ def generate_filename(parsed_info, args):
 
     if award_status:
         components.append(award_status)
-
     if candidate_location:
         components.append(candidate_location)
-
     if qs50_label:
         components.append(qs50_label)
 
     filename = "-".join(filter(None, components))
+    print(f"[DEBUG] Final filename: '{filename}'")
     return filename
-
