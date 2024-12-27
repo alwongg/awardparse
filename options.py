@@ -19,6 +19,8 @@ def parse_args():
                         help='Path to the award titles list file.')
     parser.add_argument('--award_list2', type=str, required=False, default="award_list2.txt",
                         help='Path to the award titles list file.')
+    parser.add_argument('--qs50_list', type=str, required=False, default="qs50.txt",
+                        help='Path to your qs50.txt file.')
 
     return parser.parse_args()
 

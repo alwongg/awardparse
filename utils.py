@@ -379,7 +379,11 @@ def match_awards_with_openai(resume_awards, award_list, award_list2):
         print(f"[ERROR] Award matching failed: {e}")
         return []
 
-def parse_content(text_content, target_school_list, award_list, award_list2):
+def parse_content(text_content, target_school_list, award_list, award_list2, qs50_list):
+    """
+    Main function to parse the resume text using OpenAI plus local checks,
+    then override the 'is_qs50' status based on our local qs50_list.
+    """
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     system_message = (
@@ -444,21 +448,55 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         print(f"[ERROR] JSON decoding failed: {e}")
         raise ValueError("Error parsing OpenAI response")
 
-    # Local check for schools (exact/fuzzy)
+    # 1) Local check for schools (exact/fuzzy)
     not_matched_degrees, parsed_info = check_local_school_matches(
-        parsed_info, target_school_list, fuzzy_threshold=0.9
+        parsed_info,
+        target_school_list,
+        fuzzy_threshold=0.9
     )
 
+    # 2) If some degrees not matched, do partial OpenAI matching
     if not_matched_degrees:
-        parsed_info = match_schools_with_openai_partially(parsed_info, target_school_list, not_matched_degrees)
+        parsed_info = match_schools_with_openai_partially(
+            parsed_info,
+            target_school_list,
+            not_matched_degrees
+        )
 
-    # Match awards & determine final award status
+    # 3) Match awards & determine final award status
     parsed_awards = parsed_info.get("awards", [])
     matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
     parsed_info["award_status"] = determine_award_status(matched_awards)
 
+    # 4) Override is_qs50 with a local check (ignore what the LLM said)
+    parsed_info["is_qs50"] = determine_qs50(parsed_info, qs50_list)
+
     print("[DEBUG] Completed parse_content flow. Returning parsed_info.")
     return parsed_info
+
+def determine_qs50(parsed_info, qs50_list):
+    """
+    Override 'is_qs50' by checking if the highest education institution
+    is in your local qs50_list. Return 'QS50' or '非QS50'.
+    """
+    education_level = parsed_info.get("education_level", "N/A")
+    if education_level == "博士":
+        highest_school = parsed_info.get("phd_school", "")
+    elif education_level == "硕士":
+        highest_school = parsed_info.get("master_school", "")
+    elif education_level == "本科":
+        highest_school = parsed_info.get("bachelor_school", "")
+    else:
+        highest_school = ""
+
+    highest_school = highest_school.strip()
+    if not highest_school or highest_school == "NA":
+        return "非QS50"
+
+    # Exact match check in qs50_list
+    if highest_school in qs50_list:
+        return "QS50"
+    return "非QS50"
 
 def sanitize_filename_component(component):
     """Sanitize filename components by removing invalid chars and trimming."""
@@ -508,9 +546,7 @@ def generate_filename(parsed_info, args):
     if level == "PhD":
         final_match_status = "Match" if phd_match_status == "Match" else "Not Match"
     elif level == "Master's":
-        final_match_status = ("Match"
-                              if (master_match_status == "Match"
-                                  and bachelor_match_status == "Match") else "Not Match")
+        final_match_status = "Match" if (master_match_status == "Match" and bachelor_match_status == "Match") else "Not Match"
     elif level == "Bachelor's":
         final_match_status = "Match" if bachelor_match_status == "Match" else "Not Match"
     else:
