@@ -167,10 +167,28 @@ def match_schools_with_openai(parsed_info, target_school_list):
     master_school = parsed_info.get('master_school', 'NA')
     bachelor_school = parsed_info.get('bachelor_school', 'NA')
 
+    # Provide explicit instructions about how to treat location suffixes.
+    synonyms_instructions = (
+        "Important Synonyms / Equivalences:\n"
+        "1. 华盛顿大学西雅图分校 = 华盛顿大学 (University of Washington, Seattle)\n"
+        "2. 加利福尼亚大学欧文分校 = 加利福尼亚大学欧文 (University of California, Irvine)\n"
+        "3. 加利福尼亚大学洛杉矶分校 = 加利福尼亚大学洛杉矶 (University of California, Los Angeles)\n"
+        "4. 密歇根大学安娜堡分校 = 密歇根大学 (University of Michigan, Ann Arbor)\n"
+        "\n"
+        "If a resume school is one of these '分校' forms, treat it the same as the main name.\n"
+        "If the strings are literally the same ignoring punctuation, or they match these known variations, return 'Match'.\n"
+        "Otherwise check synonyms, alt names, partial matches. If none match, return 'Not Match'.\n"
+    )
+    
     prompt = (
         "You are a professional school name matcher. Compare each school name from the resume against the target school list.\n"
         "Task:\n"
-        "For each school in the resume, check if it is found in the target school list. If the strings are literally the same (ignoring spaces/punctuation), return Match Otherwise check synonyms, alternative names, or partial matches. If no match, return Not Match.\n"
+        "1. If the resume's school name is literally the same (ignoring spaces/punctuation) as a target list entry, return 'Match'.\n"
+        "2. If the resume's school name is in the synonyms table below, treat it as the same as the main name.\n"
+        "3. Otherwise, check synonyms, alternative names, or partial matches.\n"
+        "4. If no match, return 'Not Match'.\n\n"
+        # Insert the synonyms instructions here:
+        f"{synonyms_instructions}\n"
         "Resume Schools:\n"
         f"- Phd school: {phd_school}\n"
         f"- Master school: {master_school}\n"
@@ -262,11 +280,32 @@ def match_schools_with_openai_partially(parsed_info, target_school_list, not_mat
 
     prompt_schools = "\n".join(prompt_lines)
 
+    synonyms_instructions = (
+        "Important Synonyms / Equivalences:\n\n"
+        "General Rule:\n"
+        "    If the resume's school name contains the format '[UniversityName]大学[Location]分校', "
+        "    treat it as referring to the same main institution as '[UniversityName]大学[Location]' or '[UniversityName]大学'.\n"
+        "    This means the location suffixes like '分校' do not affect whether it matches the target list.\n\n"
+        "Examples:\n"
+        "    1. 华盛顿大学西雅图分校 = 华盛顿大学 (University of Washington, Seattle)\n"
+        "    2. 加利福尼亚大学欧文分校 = 加利福尼亚大学欧文 (University of California, Irvine)\n"
+        "    3. 加利福尼亚大学洛杉矶分校 = 加利福尼亚大学洛杉矶 (University of California, Los Angeles)\n"
+        "    4. 密歇根大学安娜堡分校 = 密歇根大学 (University of Michigan)\n\n"
+        "These are just a few examples. The same logic applies to any other campus name that ends with '分校'.\n"
+        "If the strings are literally the same ignoring punctuation, or they match these known variations (via this rule), return 'Match'.\n"
+        "Otherwise, check synonyms, alt names, partial matches. If none match, return 'Not Match'.\n"
+    )
+
     prompt = (
         "You are a professional school name matcher. Compare each school name from the resume (below) "
-        "against the target school list.\n"
-        "If the strings are literally the same ignoring whitespace/punctuation, return 'Match'. "
-        "Otherwise check synonyms, alt names, partial matches. If none match, return 'Not Match'.\n\n"
+        "against the target school list.\n\n"
+        "Tasks:\n"
+        "1. If the resume's school name is literally the same (ignoring spaces/punctuation) as a target list entry, return 'Match'.\n"
+        "2. Apply the general rule that any 'X大学[Location]分校' is effectively the same as 'X大学' or 'X大学[Location]', "
+        "   including the examples below.\n"
+        "3. If it doesn't match literally or via the '分校' rule, check synonyms, alternative names, or partial matches.\n"
+        "4. If no match is found, return 'Not Match'.\n\n"
+        f"{synonyms_instructions}\n"  # Insert the general rule + examples above
         "Resume Schools:\n"
         f"{prompt_schools}\n\n"
         "Target school list:\n"
@@ -399,6 +438,7 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
         "     - Master's: 2 years after the start year\n"
         "     - Bachelor's: 4 years after the start year\n"
         "   - If only one year is given without range, try to infer if it's start or grad year. If uncertain, assume it's the grad year.\n\n"
+        "   - If the word 'expected' is beside the year, assume it's the grad year.\n\n"
         "5. 'phd_school', 'master_school', 'bachelor_school': The schools for each degree the candidate has, in Simplified Chinese.\n"
         "   - If the school is known internationally and a recognized Chinese name exists, use that. Example:\n"
         "     - 'Nanyang Technological University Singapore' -> '南洋理工大学'\n"
