@@ -418,7 +418,7 @@ def match_awards_with_openai(resume_awards, award_list, award_list2):
         print(f"[ERROR] Award matching failed: {e}")
         return []
 
-def parse_content(text_content, target_school_list, award_list, award_list2):
+def parse_content(text_content, target_school_list, award_list, award_list2, qs50_list):
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     system_message = (
@@ -496,9 +496,44 @@ def parse_content(text_content, target_school_list, award_list, award_list2):
     parsed_awards = parsed_info.get("awards", [])
     matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
     parsed_info["award_status"] = determine_award_status(matched_awards)
+    
+    parsed_info["is_qs50"] = determine_qs50(parsed_info, qs50_list)
 
     print("[DEBUG] Completed parse_content flow. Returning parsed_info.")
     return parsed_info
+
+def determine_qs50(parsed_info, qs50_list, fuzzy_threshold=0.9):
+    """
+    Override 'is_qs50' by checking if the highest education institution
+    is in your local qs50_list. Return 'QS50' or '非QS50'.
+    Use fuzzy matching if exact match fails.
+    """
+
+    education_level = parsed_info.get("education_level", "N/A")
+    if education_level == "博士":
+        highest_school = parsed_info.get("phd_school", "")
+    elif education_level == "硕士":
+        highest_school = parsed_info.get("master_school", "")
+    elif education_level == "本科":
+        highest_school = parsed_info.get("bachelor_school", "")
+    else:
+        highest_school = ""
+
+    highest_school = highest_school.strip()
+    if not highest_school or highest_school == "NA":
+        return "非QS50"
+
+    # 1) Check for exact match
+    if highest_school in qs50_list:
+        return "QS50"
+
+    # 2) Check for fuzzy match
+    for qs_school in qs50_list:
+        ratio = SequenceMatcher(None, highest_school, qs_school).ratio()
+        if ratio >= fuzzy_threshold:
+            return "QS50"
+
+    return "非QS50"
 
 def sanitize_filename_component(component):
     """Sanitize filename components by removing invalid chars and trimming."""

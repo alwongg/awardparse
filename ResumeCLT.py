@@ -92,7 +92,7 @@ def update_summary(parsed_info):
     if parsed_info.get("is_qs50", "") == "QS50":
         summary["QS50"] += 1
 
-def process_file(file, args, file_num, total_files):
+def process_file(file, args, qs50_list, file_num, total_files):
     print(f"\n-------------------------------------------------------------------------------------")
     print(f"[DEBUG] Starting to process file {file_num}/{total_files}: {file}")
 
@@ -138,7 +138,7 @@ def process_file(file, args, file_num, total_files):
     # Parse content
     try:
         print("[DEBUG] Parsing resume content with local matching + partial OpenAI matching if needed...")
-        parsed_info = parse_content(text_content, target_school_list, award_list, award_list2)
+        parsed_info = parse_content(text_content, target_school_list, award_list, award_list2, qs50_list)
         if not parsed_info:
             return handle_file_error(file, args, "Parsed content is empty.", file_num, total_files)
     except Exception as e:
@@ -153,6 +153,7 @@ def process_file(file, args, file_num, total_files):
     print(f"        Awards: {parsed_info.get('awards')}")
     print(f"        Award Status: {parsed_info.get('award_status')}")
     print(f"        is_chinese_name: {parsed_info.get('is_chinese_name')}")
+    print(f"        is_qs50: {parsed_info.get('is_qs50')}")
 
     # Generate the new filename
     file_extension = os.path.splitext(file)[1]
@@ -214,6 +215,17 @@ def main():
         print(f"Error: Target list file {args.target_list} does not exist.")
         return
 
+    # Check QS50 list path
+    if args.qs50_list and not os.path.exists(args.qs50_list):
+        print(f"Error: QS50 list file {args.qs50_list} does not exist.")
+        return
+
+    # Load QS50 universities from file
+    qs50_list = []
+    if args.qs50_list:
+        with open(args.qs50_list, 'r', encoding='utf-8') as f:
+            qs50_list = [line.strip() for line in f if line.strip()]
+            
     # Get all files with the following extensions: PDF, DOCX, DOC
     files = [file for file in os.listdir(args.source_dir) if file.endswith((".pdf", ".docx", ".doc"))]
     total_files = len(files)
@@ -227,7 +239,7 @@ def main():
     # Process each file
     for file_num, file in enumerate(files, 1):
         file_path = os.path.join(args.source_dir, file)
-        success, result = process_file(file_path, args, file_num, total_files)
+        success, result = process_file(file_path, args, qs50_list, file_num, total_files)
         print(result)
         
         # Increment counters based on outcome
