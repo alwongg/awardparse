@@ -5,7 +5,7 @@ a = Analysis(
     ['ResumeCLT.py'],
     pathex=[],
     binaries=[],
-    datas=[('test_school_list.txt', '.'), ('award_list.txt', '.'), ('award_list2.txt', '.')],
+    datas=[('award_list.txt', '.'), ('award_list2.txt', '.'), ('qs50.txt', '.'), ('test_school_list.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
