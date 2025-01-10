@@ -236,7 +236,7 @@ def match_schools_with_openai(parsed_info, target_school_list):
 def determine_award_status(matched_awards):
     """
     Determine final award status based on matched awards.
-    - If awards from both lists are matched with confidence, return "天才".
+    - If awards from both lists are matched with confidence, return "高潜".
     - If only list 1 awards are matched, return "竞赛人才".
     - If only list 2 awards are matched, return "顶会人才".
     - Otherwise, return "".
@@ -248,8 +248,8 @@ def determine_award_status(matched_awards):
                       for match in matched_awards)
 
     if list1_found and list2_found:
-        print("[DEBUG] Both list1 and list2 awards matched. Returning '天才'.")
-        return "天才"
+        print("[DEBUG] Both list1 and list2 awards matched. Returning '高潜'.")
+        return "高潜"
     elif list1_found:
         print("[DEBUG] Only list1 awards matched. Returning '竞赛人才'.")
         return "竞赛人才"
@@ -456,7 +456,7 @@ def parse_content(text_content, target_school_list, award_list, award_list2, qs5
         "10. The logic for determining the final file name outside of this function is based on these values, so ensure accuracy.\n\n"
         "Additional Notes:\n"
         "- Do not return 'NA' for a school if it is mentioned. Only return 'NA' if that degree level does not exist.\n"
-        "- Awards: just list them. The classification (竞赛人才, 顶会人才, 天才) will be handled after the award matching step.\n"
+        "- Awards: just list them. The classification (竞赛人才, 顶会人才, 高潜) will be handled after the award matching step.\n"
         "- Make sure the output is strictly valid JSON without extra commentary.\n"
     )
 

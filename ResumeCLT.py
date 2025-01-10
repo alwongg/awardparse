@@ -7,7 +7,7 @@ import shutil
 summary = {
     "竞赛人才": 0,
     "顶会人才": 0,
-    "天才": 0,
+    "高潜": 0,
     "Match": 0,
     "Not Match": 0,
     "PhD": 0,
@@ -44,8 +44,8 @@ def update_summary(parsed_info):
         summary["竞赛人才"] += 1
     elif award_status == "顶会人才":
         summary["顶会人才"] += 1
-    elif award_status == "天才":
-        summary["天才"] += 1
+    elif award_status == "高潜":
+        summary["高潜"] += 1
 
     # 1) Convert the Chinese education level to English labels used in summary
     education_level_ch = parsed_info.get("education_level", "N/A").strip()
@@ -180,7 +180,7 @@ def print_summary():
         "========================================\n"
         f" 竞赛人才: {summary['竞赛人才']}\n"
         f" 顶会人才: {summary['顶会人才']}\n"
-        f" 天才: {summary['天才']}\n"
+        f" 高潜: {summary['高潜']}\n"
         "----------------------------------------\n"
         f" Matched: {summary['Match']}\n"
         f" Not Matched: {summary['Not Match']}\n"
