@@ -259,6 +259,187 @@ def determine_award_status(matched_awards):
     else:
         print("[DEBUG] No awards matched. Returning empty string.")
         return ""
+    
+def check_local_award_matches(resume_awards, award_list, award_list2, fuzzy_threshold=0.9):
+    """
+    1. For each award in resume_awards, try exact or fuzzy match against award_list (list1) and award_list2 (list2).
+    2. Return:
+       - matched_awards: list of dicts with:
+         {
+           "resume_award": ...,
+           "matched_award": ...,
+           "list": "1", "2", "Both", or "No Awards",
+           "confidence": "High" | "Medium" | "Low"
+         }
+       - not_matched_awards: list of award strings still 'No Awards' after local matching.
+    """
+    from difflib import SequenceMatcher
+
+    def best_local_match(award, reference_list):
+        """Return (best_match_str, best_ratio) from a reference_list for a single award."""
+        best_ratio = 0.0
+        best_match_str = None
+        for ref in reference_list:
+            ratio = SequenceMatcher(None, award.lower().strip(), ref.lower().strip()).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_match_str = ref
+        return best_match_str, best_ratio
+
+    matched_awards = []
+    not_matched_awards = []
+
+    for aw in resume_awards:
+        aw_clean = aw.strip()
+        if not aw_clean:
+            continue
+
+        # 1) Compare against award_list (list1)
+        list1_best, list1_ratio = best_local_match(aw_clean, award_list)
+
+        # 2) Compare against award_list2 (list2)
+        list2_best, list2_ratio = best_local_match(aw_clean, award_list2)
+
+        # Decide which list this award belongs to locally
+        matched_list = "No Awards"
+        matched_ref = ""
+        max_ratio = 0.0
+
+        if list1_ratio >= fuzzy_threshold and list2_ratio >= fuzzy_threshold:
+            matched_list = "Both"
+            matched_ref = f"{list1_best} & {list2_best}"
+            max_ratio = max(list1_ratio, list2_ratio)
+        elif list1_ratio >= fuzzy_threshold:
+            matched_list = "1"
+            matched_ref = list1_best
+            max_ratio = list1_ratio
+        elif list2_ratio >= fuzzy_threshold:
+            matched_list = "2"
+            matched_ref = list2_best
+            max_ratio = list2_ratio
+        else:
+            # neither matched above threshold
+            matched_list = "No Awards"
+            matched_ref = "None"
+            max_ratio = max(list1_ratio, list2_ratio)
+
+        # Confidence logic
+        if max_ratio >= 0.98:
+            confidence = "High"
+        elif max_ratio >= fuzzy_threshold:
+            confidence = "Medium"
+        else:
+            confidence = "Low"
+
+        if matched_list == "No Awards":
+            not_matched_awards.append(aw_clean)
+
+        matched_awards.append({
+            "resume_award": aw_clean,
+            "matched_award": matched_ref,
+            "list": matched_list,
+            "confidence": confidence
+        })
+
+    return matched_awards, not_matched_awards
+
+def match_awards_with_openai_partially(not_matched_awards, award_list, award_list2):
+    """
+    Call OpenAI to semantically match awards from 'not_matched_awards' against
+    award_list (list1) and award_list2 (list2). Return a list of dicts:
+      [
+         {
+           "resume_award": <str>,
+           "matched_award": <str or 'None'>,
+           "list": "1", "2", "Both", or "No Awards",
+           "confidence": "High" or "Medium" or "Low"
+         }
+      ]
+    Then you can merge it back with the local matched results.
+    """
+    import os
+    import json
+    import re
+    from difflib import SequenceMatcher
+    from openai import OpenAI
+
+    if not not_matched_awards:
+        return []  # no partial matching needed
+
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    # Convert both lists to strings
+    list1_str = "\n".join(award_list)
+    list2_str = "\n".join(award_list2)
+    not_matched_str = "\n".join(not_matched_awards)
+
+    # We’ll build a prompt akin to your main 'match_awards_with_openai()',
+    # but only for the not_matched awards:
+    prompt = (
+        "You are an award classification assistant. Compare each 'unmatched' award below against two reference lists:\n"
+        "List1 (竞赛人才) and List2 (顶会人才).\n\n"
+        "- If an unmatched award is semantically or literally close to anything in List1 => 'list': 1\n"
+        "- If it's closer or equal to something in List2 => 'list': 2\n"
+        "- If it matches awards in both with high confidence => 'list': 'Both'\n"
+        "- Otherwise => 'list': 'No Awards'\n\n"
+        "We only have these unmatched awards:\n"
+        f"{not_matched_str}\n\n"
+        "List1 (竞赛人才):\n"
+        f"{list1_str}\n\n"
+        "List2 (顶会人才):\n"
+        f"{list2_str}\n\n"
+        "Return valid JSON with an array of results. Each element has:\n"
+        "resume_award, matched_award, list, confidence\n"
+        "(e.g. \"High\"/\"Medium\"/\"Low\" depending on how sure you are).\n"
+    )
+
+    try:
+        print("[INFO] Sending partial prompt for award matching to OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        raw_response = completion.choices[0].message.content
+
+        print("[DEBUG] Raw partial OpenAI award matching response:")
+        print(raw_response)
+
+        cleaned_content = re.sub(r"```json|```", "", raw_response).strip()
+        cleaned_content = re.sub(r",\s*([\}\]])", r"\1", cleaned_content)
+
+        matched_awards = json.loads(cleaned_content)
+
+        # Just ensure it's a list of dicts with the needed keys
+        final_results = []
+        for item in matched_awards:
+            # Minimal safety check
+            resume_award = item.get("resume_award", "")
+            matched_award = item.get("matched_award", "None")
+            matched_list = item.get("list", "No Awards")
+            confidence = item.get("confidence", "Low")
+            final_results.append({
+                "resume_award": resume_award,
+                "matched_award": matched_award,
+                "list": matched_list,
+                "confidence": confidence
+            })
+
+        return final_results
+
+    except Exception as e:
+        print(f"[ERROR] Partial OpenAI matching failed: {e}")
+        # If there's an error, just mark them as "No Awards"
+        fallback = []
+        for na in not_matched_awards:
+            fallback.append({
+                "resume_award": na,
+                "matched_award": "None",
+                "list": "No Awards",
+                "confidence": "Low"
+            })
+        return fallback
+
 
 def match_schools_with_openai_partially(parsed_info, target_school_list, not_matched_degrees):
     """
@@ -454,6 +635,8 @@ def parse_content(text_content, target_school_list, award_list, award_list2, qs5
         "8. 'is_qs50': If the highest degree institution is in top 50 QS ranking, return 'QS50'. Otherwise '非QS50'. If unsure, assume '非QS50'.\n\n"
         "9. 'is_chinese_name': 'Yes' if the candidate's name is Chinese. Use the 百家姓 (Hundred Family Surnames) as the standard reference for identifying Chinese names. Additionally, if the name consists entirely of Chinese characters, return 'Yes' without further checks. 'No' otherwise.\n\n"
         "10. The logic for determining the final file name outside of this function is based on these values, so ensure accuracy.\n\n"
+        "IMPORTANT: For the 'awards' key, please return them **in English** only, even if the resume is partially or fully in Chinese.\n"
+        "If you can only find Chinese award names, provide the commonly known English name or a recognized short name in English.\n"
         "Additional Notes:\n"
         "- Do not return 'NA' for a school if it is mentioned. Only return 'NA' if that degree level does not exist.\n"
         "- Awards: just list them. The classification (竞赛人才, 顶会人才, 高潜) will be handled after the award matching step.\n"
@@ -494,8 +677,54 @@ def parse_content(text_content, target_school_list, award_list, award_list2, qs5
 
     # Match awards & determine final award status
     parsed_awards = parsed_info.get("awards", [])
-    matched_awards = match_awards_with_openai(parsed_awards, award_list, award_list2)
-    parsed_info["award_status"] = determine_award_status(matched_awards)
+    if not parsed_awards:
+        # If there's no award in resume, just set status = "No Awards"
+        print("[DEBUG] No awards found in the parsed resume. Skipping award matching.")
+        parsed_info["award_status"] = "No Awards"
+    else:
+        # First do local matching
+        local_matched_awards, not_matched_awards = check_local_award_matches(
+            parsed_awards, award_list, award_list2, fuzzy_threshold=0.9
+        )
+
+        # If some are still "No Awards" after local approach, partial GPT match them
+        if not_matched_awards:
+            partial_matches = match_awards_with_openai_partially(
+                not_matched_awards, award_list, award_list2
+            )
+            # Merge partial_matches with local_matched_awards
+            # Key concept: same "resume_award" can appear in partial if it was "No Awards" locally
+            # We'll unify them by resume_award
+            partial_dict = {pm["resume_award"]: pm for pm in partial_matches}
+
+            final_matched = []
+            for item in local_matched_awards:
+                if item["list"] == "No Awards":
+                    # Overwrite from partial if found
+                    pm = partial_dict.get(item["resume_award"])
+                    if pm:
+                        final_matched.append(pm)
+                    else:
+                        # Should not happen, but safe fallback
+                        final_matched.append(item)
+                else:
+                    # If local was matched, keep local
+                    final_matched.append(item)
+        else:
+            final_matched = local_matched_awards
+
+        # Now figure out the final award_status
+        has_list1 = any(m["list"] in ["1", "Both"] for m in final_matched)
+        has_list2 = any(m["list"] in ["2", "Both"] for m in final_matched)
+
+        if has_list1 and has_list2:
+            parsed_info["award_status"] = "高潜"
+        elif has_list1:
+            parsed_info["award_status"] = "竞赛人才"
+        elif has_list2:
+            parsed_info["award_status"] = "顶会人才"
+        else:
+            parsed_info["award_status"] = "No Awards"                          
     
     parsed_info["is_qs50"] = determine_qs50(parsed_info, qs50_list)
 
