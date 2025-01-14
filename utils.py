@@ -844,7 +844,7 @@ def generate_filename(parsed_info, args):
         grad_year,
     ]
 
-    if award_status:
+    if award_status and award_status != "No Awards":
         components.append(award_status)
     if candidate_location:
         components.append(candidate_location)
