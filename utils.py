@@ -624,7 +624,6 @@ def parse_content(text_content, target_school_list, award_list, award_list2, qs5
         "   - If the school is known internationally and a recognized Chinese name exists, use that. Example:\n"
         "     - 'Nanyang Technological University Singapore' -> '南洋理工大学'\n"
         "     - 'Zhejiang University' -> '浙江大学'\n"
-        "   - If the school name is only in English and no known Chinese translation is commonly used, return the name as is but ideally in Simplified Chinese if known.\n"
         "   - If the candidate does not hold that degree level, return 'NA'.\n\n"
         "6. 'awards': A list of awards the candidate achieved, normalized if possible.\n\n"
         "7. 'candidate_location': The candidate's country location in Simplified Chinese. Determine by priority:\n"
